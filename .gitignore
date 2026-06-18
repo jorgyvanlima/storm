@@ -1,0 +1,28 @@
+# Private SSH Keys and Credentials
+*.pem
+*.ppk
+credentials*
+*.key
+*.crt
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+
+# Node caches and builds
+node_modules/
+dist/
+.eslintcache
+
+# PostgreSQL data
+pgdata/
+db_data/
+
+# OS files
+.DS_Store
+Thumbs.db

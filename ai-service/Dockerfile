@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY generate_data.py train.py ./
+
+# Default shared output directory
+ENV MODEL_OUTPUT_DIR=/shared
+
+CMD ["python", "train.py"]

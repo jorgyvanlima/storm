@@ -1,0 +1,378 @@
+
+  banco de dados postgres - onde deve ser salvo os dados recebido pelo IOT 
+
+
+codigo IOT >>
+import network
+import time
+import random
+import math
+from machine import Pin, I2C
+import dht
+from umqtt.simple import MQTTClient
+from esp32_i2c_lcd import I2cLcd
+
+# --- CONFIGURAÇÕES DE REDE E MQTT ---
+# ATENÇÃO: Mantenha sempre "Wokwi-GUEST" no simulador, independente da sua rede real
+WIFI_SSID = "Wokwi-GUEST"
+WIFI_PASSWORD = ""
+
+# Suas credenciais exatas geradas em Devices > MQTT
+MQTT_CLIENT_ID = "LCcbLzorMS0uEjMRKzkFMSw"
+MQTT_USERNAME  = "LCcbLzorMS0uEjMRKzkFMSw"  
+MQTT_PASSWORD  = "Dg8VnisWT+tGG60R+KXihFK/"
+MQTT_BROKER    = "mqtt3.thingspeak.com"
+THINGSPEAK_CHANNEL_ID = "3408600" 
+
+MQTT_TOPIC = "channels/{}/publish".format(THINGSPEAK_CHANNEL_ID)
+
+# --- CONFIGURAÇÕES I2C PARA O LCD ---
+i2c = I2C(0, sda=Pin(21), scl=Pin(22), freq=400000)
+lcd = I2cLcd(i2c, 0x27, 2, 16) 
+
+# --- INICIALIZAÇÃO DE HARDWARE ---
+sensor_dht = dht.DHT22(Pin(15))
+
+lcd.putstr("Iniciando IoT...")
+time.sleep(2)
+lcd.clear()
+
+# --- FUNÇÃO CONECTAR WI-FI ---
+def conecta_wifi():
+    print("Conectando au Wi-Fi...", end="")
+    sta_if = network.WLAN(network.STA_IF)
+    sta_if.active(True)
+    sta_if.connect(WIFI_SSID, WIFI_PASSWORD)
+    while not sta_if.isconnected():
+        print(".", end="")
+        time.sleep(0.5)
+    print(" Conectado! IP:", sta_if.ifconfig()[0])
+
+# --- FUNÇÃO CONECTAR MQTT ---
+def conecta_mqtt():
+    print("Conectando ao Broker MQTT do ThingSpeak...")
+    client = MQTTClient(
+        client_id=MQTT_CLIENT_ID, 
+        server=MQTT_BROKER, 
+        port=1883,
+        user=MQTT_USERNAME, 
+        password=MQTT_PASSWORD,
+        keepalive=0 
+    )
+    client.connect()
+    print("Conectado ao Broker MQTT com sucesso!")
+    return client
+
+# Inicialização das conexões
+conecta_wifi()
+try:
+    cliente_mqtt = conecta_mqtt()
+except Exception as e:
+    print("Falha na conexão MQTT. Modo offline ativa.", e)
+    cliente_mqtt = None
+
+passo_tempo = 0
+
+# --- VARIÁVEIS DE CONTROLE ---
+# Removemos o "passo_tempo" pois agora o motor do sistema são os seus dedos nos sliders!
+
+while True:
+    try:
+        # 1. Leitura direta dos Sliders físicos do Wokwi
+        sensor_dht.measure()
+        temp = sensor_dht.temperature()
+        umidade = sensor_dht.humidity()
+        
+        # 2. Motor de Correlação Climática Dinâmica (Causa e Efeito)
+        # Se a umidade estiver muito alta (> 85%) e a temperatura amena/baixa (< 28°C), simulamos chuva forte
+        if umidade >= 85.0 and temp <= 28.0:
+            # Chuva proporcional à saturação da umidade
+            precipitacao = round(random.uniform(25.0, 50.0) * (umidade / 100.0), 1)
+            # Baixa pressão (típico de tempestades)
+            pressao = round(random.uniform(994.0, 999.0), 1)
+            
+        # Se a umidade for moderada (entre 65% e 85%)
+        elif 65.0 <= umidade < 85.0:
+            # Chuva leve ou isolada
+            precipitacao = round(random.uniform(1.0, 12.0), 1)
+            pressao = round(random.uniform(1000.0, 1006.0), 1)
+            
+        # Tempo seco e quente (Umidade < 65% ou Temperatura alta) -> Sem chuva
+        else:
+            precipitacao = 0.0
+            # Alta pressão (tempo firme e estável)
+            pressao = round(random.uniform(1008.0, 1014.0), 1)
+
+        # Garantimos as travas de arredondamento
+        umidade = round(umidade, 1)
+
+        # --- ATUALIZAÇÃO DO LCD ---
+        lcd.clear() 
+        lcd.move_to(0, 0) 
+        lcd.putstr("T:{:.1f}C U:{:.0f}%".format(temp, umidade))
+        lcd.move_to(0, 1) 
+        lcd.putstr("Chuva: {:.1f}mm".format(precipitacao))
+        
+        # --- ENVIO PARA A NUVEM VIA MQTT ---
+        payload_string = "field1={:.1f}&field2={:.1f}&field3={:.1f}&field4={:.1f}".format(
+            temp, umidade, precipitacao, pressao
+        )
+        print("\nDados prontos para envio (MQTT):", payload_string)
+
+        if cliente_mqtt is None:
+            try:
+                cliente_mqtt = conecta_mqtt()
+            except:
+                print("Broker indisponível.")
+        
+        if cliente_mqtt:
+            dados_bytes = bytes(payload_string, 'utf-8')
+            cliente_mqtt.publish(MQTT_TOPIC, dados_bytes)
+            print("Dados transmitidos com sucesso via MQTT!")
+            
+    except OSError as e:
+        print("Erro de rede, reiniciando o cliente MQTT:", e)
+        cliente_mqtt = None 
+        
+    # Intervalo regulamentar do ThingSpeak
+    time.sleep(16)
+    
+    
+    
+    
+    Python que faz analise 
+    fase 01 
+    
+    import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import joblib
+
+# 1. CARREGAR OS DADOS REAIS DA INTERNET
+caminho_arquivo = "dados_climaticos.csv"
+df = pd.read_csv(caminho_arquivo, sep=';', decimal=',', encoding='latin-1', skiprows=8)
+
+# 2. SELECIONAR PELA POSIÇÃO DA COLUNA (ILOC)
+# Capturamos as colunas exatas pelos índices numéricos para evitar erros de acentuação
+df_ia = pd.DataFrame({
+    'temperatura': df.iloc[:, 7],   # Coluna H (8ª coluna)
+    'umidade':     df.iloc[:, 15],  # Coluna P (16ª coluna)
+    'precipitacao': df.iloc[:, 2],   # Coluna C (3ª coluna)
+    'pressao':     df.iloc[:, 3]    # Coluna D (4ª coluna)
+})
+
+# Remove linhas vazias/nulas que possam existir no histórico
+df_ia = df_ia.dropna()
+
+print(f"Total de registros reais carregados para o treino: {len(df_ia)}")
+print("\nPrimeiras linhas extraídas para validação:")
+print(df_ia.head())
+
+# =====================================================================
+# O restante do código de treino (A partir do Scaler) continua idêntico:
+# =====================================================================
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df_ia)
+
+modelo_kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+df_ia['cluster'] = modelo_kmeans.fit_predict(X_scaled)
+
+resumo_clusters = df_ia.groupby('cluster')['precipitacao'].mean().sort_values()
+mapa_risco = {
+    resumo_clusters.index[0]: "Baixo",
+    resumo_clusters.index[1]: "Moderado",
+    resumo_clusters.index[2]: "Alto"
+}
+
+print("\nMapeamento de Risco definido pela IA:")
+for cluster_id, nivel in mapa_risco.items():
+    print(f" -> Cluster {cluster_id}: Risco {nivel}")
+
+joblib.dump(modelo_kmeans, 'modelo_clima_kmeans.pkl')
+joblib.dump(scaler, 'scaler_clima.pkl')
+joblib.dump(mapa_risco, 'mapa_risco.pkl')
+
+print("\nSucesso! Arquivos de Inteligência Artificial gerados.")
+
+
+fase 02 
+
+import pandas as pd
+import numpy as np
+import time
+import requests
+import joblib
+import matplotlib.pyplot as plt
+from IPython.display import clear_output
+from datetime import datetime
+from zoneinfo import ZoneInfo  # Biblioteca padrão para manipulação de fusos horários
+import warnings
+warnings.filterwarnings('ignore')
+
+# 1. CARREGAR ARTEFATOS DA IA
+try:
+    kmeans = joblib.load('modelo_clima_kmeans.pkl')
+    scaler = joblib.load('scaler_clima.pkl')
+    mapa_risco = joblib.load('mapa_risco.pkl')
+    print("Módulo de IA e Dashboard carregados com sucesso!\n")
+except Exception as e:
+    print("Erro ao carregar os arquivos .pkl:", e)
+
+# 2. CONFIGURAÇÃO DA NUVEM
+CHANNEL_ID = "3408600"
+READ_API_KEY = "QOIJWOHS4M8MUEVS"
+
+URL_LEITURA = f"https://api.thingspeak.com/channels/{CHANNEL_ID}/feeds.json?api_key={READ_API_KEY}&results=1"
+
+historico_chuva = []
+historico_timestamps = []
+
+print("="*60)
+print(f"DASHBOARD PREDITIVO EM TEMPO REAL - CANAL {CHANNEL_ID}")
+print("="*60)
+
+while True:
+    try:
+        resposta = requests.get(URL_LEITURA)
+        dados_nuvem = resposta.json()
+
+        if isinstance(dados_nuvem, int) or dados_nuvem == -1 or 'feeds' not in dados_nuvem:
+            print(f"\n[DEBUG] Resposta inválida da Nuvem: {dados_nuvem}")
+            print("Aguardando pacotes estruturados no ThingSpeak...")
+            time.sleep(16)
+            continue
+
+        feeds_lista = dados_nuvem['feeds']
+        if not feeds_lista:
+            print("\n[DEBUG] Canal encontrado, mas a lista de feeds está vazia.")
+            time.sleep(16)
+            continue
+
+        feed = feeds_lista[0]
+
+        if feed['field1'] is None or feed['field1'] == '':
+            print("\nAguardando sincronismo de dados válidos na Nuvem...")
+            time.sleep(16)
+            continue
+
+        temp = float(feed['field1'])
+        umidade = float(feed['field2'])
+        chuva = float(feed['field3'])
+        pressao = float(feed['field4'])
+
+        # --- AJUSTE DE ENGENHARIA DE TEMPO REGIONAL (CORREÇÃO DE FUSO) ---
+        # Força o Python a capturar o horário atual da máquina virtual, mas convertido para o fuso de Belém
+        timestamp_local = datetime.now(ZoneInfo('America/Belem')).strftime("%H:%M:%S")
+
+        # Adiciona o dado no histórico de forma contínua
+        historico_chuva.append(chuva)
+        historico_timestamps.append(timestamp_local)
+
+        if len(historico_chuva) > 8:
+            historico_chuva.pop(0)
+            historico_timestamps.pop(0)
+        # -----------------------------------------------------------------
+
+        # 3. INFERÊNCIA DO MODELO DE IA
+        novo_dado = np.array([[temp, umidade, chuva, pressao]])
+        novo_dado_scaled = scaler.transform(novo_dado)
+        cluster_predito = kmeans.predict(novo_dado_scaled)[0]
+        status_risco = mapa_risco[cluster_predito]
+
+        # 4. RENDERIZAÇÃO DO DASHBOARD GRÁFICO
+        clear_output(wait=True)
+
+        cor_status = '#edf7ed' if status_risco == 'Baixo' else ('#fff4e5' if status_risco == 'Moderado' else '#fdeded')
+        cor_barra = '#48bb78' if status_risco == 'Baixo' else ('#ecc94b' if status_risco == 'Moderado' else '#f56565')
+
+        fig = plt.figure(figsize=(14, 6))
+        fig.patch.set_facecolor('#f7fafc')
+
+        # Banner de Risco Superior
+        ax_banner = plt.subplot2grid((2, 3), (0, 0), colspan=3)
+        ax_banner.set_facecolor(cor_status)
+
+        ax_banner.text(0.44, 0.5, "STATUS IA: ",
+                       color='black', fontsize=18, fontweight='bold', ha='right', va='center')
+
+        cor_texto_risco = '#2e7d32' if status_risco == 'Baixo' else ('#ed6c02' if status_risco == 'Moderado' else '#d32f2f')
+
+        ax_banner.text(0.45, 0.5, f"RISCO {status_risco.upper()}",
+                       color=cor_texto_risco, fontsize=18, fontweight='bold', ha='left', va='center')
+
+        ax_banner.axis('off')
+
+        # Gráfico de Barras - Telemetria Atual Unificada
+        ax_bars = plt.subplot2grid((2, 3), (1, 0))
+        variaveis = ['Temp (°C)', 'Umid (%)', 'Pressão (mBar) / 10']
+        valores = [temp, umidade, pressao / 10]
+
+        bars = ax_bars.bar(variaveis, valores, color=['#4299e1', '#667eea', '#ed64a6'], width=0.5)
+        ax_bars.set_ylim(0, 120)
+        ax_bars.set_title("Telemetria Atual", fontsize=11, fontweight='bold', color='#2d3748')
+        ax_bars.grid(axis='y', linestyle='--', alpha=0.5)
+
+        for bar in bars:
+            yval = bar.get_height()
+            ax_bars.text(bar.get_x() + bar.get_width()/2.0, yval + 2, f"{yval:.1f}",
+                         ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+        # Gráfico de Linha - Evolução Temporal de Chuva
+        ax_line = plt.subplot2grid((2, 3), (1, 1), colspan=2)
+        ax_line.plot(historico_timestamps, historico_chuva, marker='o', linewidth=2.5, color=cor_barra, label='Precipitação (mm)')
+        ax_line.fill_between(historico_timestamps, historico_chuva, color=cor_barra, alpha=0.15)
+
+        ax_line.set_ylabel("Milímetros (mm)", fontsize=9, color='#4a5568')
+        ax_line.set_ylim(0, max(50, max(historico_chuva) + 5))
+        ax_line.set_title("Histórico Recente de Chuva (Evolução Temporal)", fontsize=11, fontweight='bold', color='#2d3748')
+        ax_line.grid(True, linestyle='--', alpha=0.5)
+        ax_line.legend(loc='upper left', fontsize=9)
+
+        plt.tight_layout()
+        plt.show()
+
+        print(f"Última atualização: {timestamp_local} | Canal IoT: {CHANNEL_ID} | Status: Conexão Estável")
+
+    except Exception as e:
+        print("\nErro temporário de conexão ou processamento:", e)
+
+    time.sleep(16)
+    
+    
+    
+    Modelo de IA >>
+    
+    version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama_ai
+    volumes:
+      - ollama_storage:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open_webui_interface
+    ports:
+      - "3000:8080"
+    volumes:
+      - webui_storage:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_storage:
+  webui_storage:
+  
+  
+  
+  
+  

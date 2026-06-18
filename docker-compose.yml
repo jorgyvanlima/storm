@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: storm_db
+    environment:
+      POSTGRES_DB: storm_db
+      POSTGRES_USER: storm_user
+      POSTGRES_PASSWORD: storm_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storm_user -d storm_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # 2. MQTT Broker (Mosquitto)
+  broker:
+    image: eclipse-mosquitto:2
+    container_name: storm_broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./broker/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    restart: unless-stopped
+
+  # 3. AI Service (Generates data & trains the model once, then exits)
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: storm_ai_trainer
+    volumes:
+      - shared_model:/shared
+    environment:
+      - MODEL_OUTPUT_DIR=/shared
+
+  # 4. Backend Service (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: storm_backend
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=storm_db
+      - DB_USER=storm_user
+      - DB_PASSWORD=storm_password
+      - MQTT_BROKER=broker
+      - MQTT_PORT=1883
+      - MODEL_DIR=/shared
+    volumes:
+      - shared_model:/shared
+    depends_on:
+      db:
+        condition: service_healthy
+      ai-service:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # 5. IoT Simulator Service (Simulates ESP32 DHT22 + Weather engine)
+  iot-simulator:
+    build:
+      context: ./iot-simulator
+      dockerfile: Dockerfile
+    container_name: storm_iot_simulator
+    environment:
+      - MQTT_BROKER=broker
+      - MQTT_PORT=1883
+    depends_on:
+      - broker
+      - backend
+    restart: unless-stopped
+
+  # 6. Frontend Service (React App served by Nginx proxying api/ws)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: storm_frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  shared_model:
