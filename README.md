@@ -94,6 +94,53 @@ Por se tratar de um projeto de pós-graduação em **Cibersegurança**, foram im
 
 ---
 
+## 🛡️ Práticas de MLSecOps (Machine Learning Security Operations)
+
+O projeto STORM implementa os princípios fundamentais de **MLSecOps** (Machine Learning Security Operations) para garantir a segurança, integridade e confiabilidade de todo o ciclo de vida do modelo de IA (desde a ingestão e treino até a inferência em produção).
+
+1.  **Segurança dos Dados de Treinamento (Dataset Integrity & Poisoning Protection):**
+    *   O gerador de dados sintéticos do `ai-service` (`generate_data.py`) é isolado no contêiner de compilação.
+    *   Ele valida os dados sintéticos em relação a limites físicos reais (ex: precipitação >= 0, umidade de 0 a 100). Isso evita ataques de envenenamento de dados (*data poisoning*) onde valores extremos ou anômalos poderiam distorcer os centros de cluster no modelo K-Means.
+2.  **Segurança da Cadeia de Suprimentos do Modelo (Model Supply Chain Security):**
+    *   Todas as dependências das bibliotecas de machine learning (*scikit-learn*, *pandas*, *numpy*, *joblib*) têm suas versões rigidamente fixadas no `requirements.txt` do `ai-service` e do `backend`.
+    *   Isso impede ataques de injeção de dependências maliciosas (*dependency confusion*) e assegura a consistência matemática na desserialização do modelo via `joblib`.
+3.  **Segurança Física e Lógica dos Artefatos de IA (Model Storage Isolation):**
+    *   Os modelos serializados (`.pkl`) são gerados pelo contêiner `ai-service` e persistidos em um volume Docker compartilhado (`shared_model`).
+    *   O contêiner `ai-service` encerra após salvar os arquivos. O contêiner do `backend` lê esses modelos no startup em modo de menor privilégio. A rede do docker impede acesso externo direto a este volume de artefatos.
+4.  **Resiliência e Mecanismo de Fallback (Fail-Safe Inference Mode):**
+    *   Caso os arquivos de modelo (`.pkl`) sejam danificados, excluídos ou sofram falha de carregamento no startup do `backend/main.py`, o sistema ativa automaticamente um **modo de contingência de regras locais** (*offline/rules-only mode*).
+    *   O backend continua ingerindo telemetrias IoT e calculando riscos de alagamento básicos para os bairros, reportando o aviso de falha do modelo nos logs do dashboard, garantindo alta disponibilidade (*High Availability*).
+5.  **Sanitização na Inferência (Adversarial Robustness & Input Sanitization):**
+    *   O backend higieniza as entradas recebidas por MQTT convertendo-as para `float` e assegurando que os dados recebidos possuem as quatro variáveis físicas exigidas pelo classificador. Leituras incompatíveis são descartadas no bloco `try-except` de processamento, neutralizando ataques de injeção que visam desestabilizar a API.
+
+---
+
+## 🔍 Rastreabilidade do Código (Fluxo de Dados & Modelos)
+
+Para fins de auditoria e desenvolvimento, o ciclo de vida dos dados e predições no código-fonte está estruturado da seguinte forma:
+
+1.  **Ingestão e Persistência do IoT para o PostgreSQL:**
+    *   **Ponto de Ingestão:** Em `backend/main.py` na função `on_message` (Linhas 225-258). Os dados MQTT são capturados da fila e interpretados tanto no formato JSON quanto no formato URL-encoded (padrão físico do microcontrolador ESP32).
+    *   **Processamento e Escrita no Banco:** O callback delega de maneira assíncrona para a função `process_telemetry` (Linhas 156-215). Nela, os dados são salvos na tabela `telemetry` através de queries parametrizadas na conexão criada por `get_db_connection` (Linhas 87-104).
+2.  **Treinamento do Modelo de Machine Learning (K-Means):**
+    *   **Geração:** Em `ai-service/generate_data.py`, a função `generate_synthetic_data` (Linhas 5-93) cria o arquivo `dados_climaticos.csv` simulando o perfil pluviométrico de Belém.
+    *   **Treinamento e Exportação:** Em `ai-service/train.py`, a função `train_model` (Linhas 11-59) normaliza os dados usando `StandardScaler` e executa o algoritmo de clusterização `KMeans` da biblioteca *scikit-learn* configurado para 3 grupos. Classifica as médias de chuva para gerar o mapeamento de risco (`mapa_risco`) e exporta os arquivos `.pkl` para o volume de dados usando `joblib.dump` (Linhas 54-56).
+3.  **Inferência e Predição de Alagamento em Tempo Real:**
+    *   **Carregamento:** No startup do `backend/main.py` na função `startup_event` (Linhas 260-299), o backend tenta carregar os arquivos `.pkl` do volume compartilhado.
+    *   **Predição:** Na função `process_telemetry`, as quatro variáveis físicas capturadas do IoT são alimentadas na IA (Linhas 161-171):
+        ```python
+        input_data = np.array([[temp, humidity, precipitation, pressure]])
+        scaled = scaler.transform(input_data)
+        cluster = kmeans.predict(scaled)[0]
+        risk_level = mapa_risco.get(cluster)
+        ```
+    *   **Cálculo dos Bairros:** A função `calculate_neighborhood_floods` (Linhas 107-153) usa a precipitação para simular a elevação de água e a probabilidade de enchente com base em parâmetros hidrológicos específicos de Belém (Doca, Cidade Velha, Jurunas, Umarizal, Batista Campos, Marco).
+4.  **Visualização Web e Alertas na Plataforma:**
+    *   **Transmissão:** No final de `process_telemetry` (Linhas 201-214), os dados preditos e as estatísticas dos bairros são transmitidos instantaneamente para os WebSockets conectados via `manager.broadcast` (Linha 211).
+    *   **Monitoramento e Reação Visual (Frontend):** No painel React `frontend/src/App.jsx` (Linhas 56-118), o estado dos cards dos bairros de Belém é atualizado dinamicamente com base nas probabilidades enviadas pelo WebSocket. A interface reage com efeitos visuais e ativa as animações de relâmpagos caso o `risk_level` seja classificado como "Alto".
+
+---
+
 ## 📂 Estrutura do Repositório
 
 ```text
