@@ -85,7 +85,7 @@ services:
       dockerfile: Dockerfile
     container_name: storm_frontend
     ports:
-      - "8080:8080"
+      - "8085:8080"
     depends_on:
       - backend
     restart: unless-stopped

@@ -81,8 +81,9 @@ def main():
         
         # Format exact ThingSpeak-like query string:
         # field1=temp, field2=humidity, field3=precip, field4=pressure
-        payload_string = f"field1={temp}&field2={humidity}&field3={precipitation}&field4={pressure}"
-        
+        # Format exact ThingSpeak-like query string com identificador de origem:
+        payload_string = f"field1={temp}&field2={humidity}&field3={precipitation}&field4={pressure}&source=simulador"        
+
         try:
             client.publish(MQTT_TOPIC_TELEMETRY, payload_string)
             print(f"Simulator Published: {payload_string} (Preset: {current_preset.upper()})")
